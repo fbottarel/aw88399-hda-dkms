@@ -19,6 +19,7 @@ mkdir -p "$PKG_DIR/lib/firmware"
 mkdir -p "$PKG_DIR/etc/modprobe.d"
 mkdir -p "$PKG_DIR/etc/default/grub.d"
 mkdir -p "$PKG_DIR/usr/share/wireplumber/wireplumber.conf.d"
+mkdir -p "$PKG_DIR/usr/share/alsa/ucm2/HDA"
 
 # --- Copy DKMS source (only what's needed to build) ---
 DKMS_DST="$PKG_DIR/usr/src/${PKGNAME}-${VERSION}"
@@ -50,6 +51,12 @@ sed -i "s/PACKAGE_VERSION=.*/PACKAGE_VERSION=\"${VERSION}\"/" "$DKMS_DST/dkms.co
 if [ -f "$SCRIPT_DIR/firmware/aw88399_acf.bin" ]; then
     cp "$SCRIPT_DIR/firmware/aw88399_acf.bin" "$PKG_DIR/lib/firmware/"
 fi
+
+# --- UCM2 configs (internal mic in SOF mode) ---
+# These replace files owned by alsa-ucm-conf, so the package diverts the
+# originals in preinst (see below) instead of overwriting them.
+cp "$SCRIPT_DIR/ucm2/HiFi-analog.conf" "$PKG_DIR/usr/share/alsa/ucm2/HDA/"
+cp "$SCRIPT_DIR/ucm2/HiFi-mic.conf" "$PKG_DIR/usr/share/alsa/ucm2/HDA/"
 
 # --- modprobe config ---
 cat > "$PKG_DIR/etc/modprobe.d/aw88399-hda.conf" << 'EOF'
@@ -112,8 +119,25 @@ Description: AW88399 smart amplifier DKMS driver for Lenovo Legion laptops
   - aw88399-setup (ACPI workaround helper)
  .
  Also installs AW88399 firmware, sets snd_intel_dspcfg.dsp_driver=3,
- and includes a WirePlumber config to fix SOF DSP broken pipe issues.
+ includes a WirePlumber config to fix SOF DSP broken pipe issues,
+ and diverts the HDA UCM2 configs so the internal mic works in SOF mode.
 EOF
+
+# --- preinst (divert alsa-ucm-conf's UCM files) ---
+cat > "$PKG_DIR/DEBIAN/preinst" << 'PREINST'
+#!/bin/bash
+set -e
+
+# Move alsa-ucm-conf's versions aside (*.distrib) so ours can take their
+# place. Future alsa-ucm-conf upgrades will update the .distrib copies
+# instead of overwriting our files.
+for f in HiFi-analog.conf HiFi-mic.conf; do
+    dpkg-divert --package aw88399-hda-dkms --add --rename \
+        --divert "/usr/share/alsa/ucm2/HDA/$f.distrib" \
+        "/usr/share/alsa/ucm2/HDA/$f"
+done
+PREINST
+chmod 755 "$PKG_DIR/DEBIAN/preinst"
 
 # --- postinst ---
 cat > "$PKG_DIR/DEBIAN/postinst" << 'POSTINST'
@@ -145,6 +169,7 @@ fi
 echo ""
 echo "=== AW88399 HDA DKMS installed ==="
 echo "Please reboot for changes to take effect."
+echo "(Or for the mic only: systemctl --user restart pipewire wireplumber)"
 echo ""
 POSTINST
 sed -i "s/#VERSION#/${VERSION}/" "$PKG_DIR/DEBIAN/postinst"
@@ -168,6 +193,17 @@ chmod 755 "$PKG_DIR/DEBIAN/prerm"
 # --- postrm ---
 cat > "$PKG_DIR/DEBIAN/postrm" << 'POSTRM'
 #!/bin/bash
+
+# Give alsa-ucm-conf its original UCM files back
+case "$1" in
+    remove|abort-install|disappear)
+        for f in HiFi-analog.conf HiFi-mic.conf; do
+            dpkg-divert --package aw88399-hda-dkms --remove --rename \
+                --divert "/usr/share/alsa/ucm2/HDA/$f.distrib" \
+                "/usr/share/alsa/ucm2/HDA/$f" || true
+        done
+        ;;
+esac
 
 if [ "$1" = "purge" ] || [ "$1" = "remove" ]; then
     rm -f /lib/firmware/aw88399_acf.bin

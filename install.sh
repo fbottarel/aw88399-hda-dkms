@@ -58,7 +58,7 @@ if ! modinfo -F firmware "$SCRIPT_DIR/snd-soc-aw88399.ko" | grep -Fxq aw88399_ac
 fi
 
 # Step 1: Install firmware
-echo "[1/5] Installing firmware..."
+echo "[1/6] Installing firmware..."
 if [ -f "$SCRIPT_DIR/firmware/aw88399_acf.bin" ]; then
     cp "$SCRIPT_DIR/firmware/aw88399_acf.bin" /lib/firmware/
     echo "  Installed /lib/firmware/aw88399_acf.bin"
@@ -69,7 +69,7 @@ else
 fi
 
 # Step 2: Install modules
-echo "[2/5] Installing kernel modules..."
+echo "[2/6] Installing kernel modules..."
 DEST="$MOD_DIR/updates/dkms"
 mkdir -p "$DEST"
 
@@ -82,7 +82,7 @@ depmod -a "$KVER"
 echo "  Module dependencies updated"
 
 # Step 3: Configure module loading order
-echo "[3/5] Configuring module loading..."
+echo "[3/6] Configuring module loading..."
 cat > /etc/modprobe.d/aw88399-hda.conf << 'MODCONF'
 # AW88399 HDA sound fix for Lenovo Legion
 # Blacklist the old snd_soc_aw88399 ACPI binding (we use HDA scodec instead)
@@ -93,7 +93,7 @@ MODCONF
 echo "  Created /etc/modprobe.d/aw88399-hda.conf"
 
 # Step 4: Install WirePlumber config (SOF DSP broken pipe workaround)
-echo "[4/5] Installing WirePlumber config..."
+echo "[4/6] Installing WirePlumber config..."
 WP_DIR="/usr/share/wireplumber/wireplumber.conf.d"
 if [ -d "$(dirname "$WP_DIR")" ]; then
     mkdir -p "$WP_DIR"
@@ -122,8 +122,25 @@ else
     echo "  WirePlumber not found, skipping"
 fi
 
-# Step 5: Update initramfs
-echo "[5/5] Updating initramfs..."
+# Step 5: Install UCM2 configs (internal mic in SOF mode)
+echo "[5/6] Installing UCM2 configs..."
+UCM_DIR="/usr/share/alsa/ucm2/HDA"
+if [ -d "$UCM_DIR" ]; then
+    for f in HiFi-analog.conf HiFi-mic.conf; do
+        # Keep one backup of the distro's original, never overwrite it
+        if [ -f "$UCM_DIR/$f" ] && [ ! -f "$UCM_DIR/$f.bak" ]; then
+            cp -a "$UCM_DIR/$f" "$UCM_DIR/$f.bak"
+        fi
+        cp "$SCRIPT_DIR/ucm2/$f" "$UCM_DIR/"
+        echo "  Installed $UCM_DIR/$f"
+    done
+    echo "  Note: alsa-ucm-conf updates will overwrite these; re-run this step"
+else
+    echo "  $UCM_DIR not found, skipping"
+fi
+
+# Step 6: Update initramfs
+echo "[6/6] Updating initramfs..."
 if command -v update-initramfs &>/dev/null; then
     update-initramfs -u -k "$KVER"
 elif command -v dracut &>/dev/null; then
